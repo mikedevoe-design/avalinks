@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="My Videos">
+<title>My Videos</title>
+<style>
+  /* ============ SETUP: paste your Google Sheet ID below (in the script) ============ */
+  :root {
+    --bg: #0f0f14; --card: #1b1b24; --text: #f4f4f8; --muted: #9a9aab;
+    --accent: #ff4f7b; --seen: #3a3a48;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Segoe UI, Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent; }
+  header { position: sticky; top: 0; z-index: 5; background: rgba(15,15,20,.92);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    padding: calc(env(safe-area-inset-top) + 14px) 18px 12px;
+    display: flex; align-items: center; justify-content: space-between; }
+  h1 { margin: 0; font-size: 22px; font-weight: 700; }
+  #refresh { background: var(--card); color: var(--text); border: 0; border-radius: 999px;
+    padding: 8px 14px; font-size: 14px; }
+  main { padding: 8px 14px calc(env(safe-area-inset-bottom) + 30px); max-width: 520px; margin: 0 auto; }
+  .status { color: var(--muted); text-align: center; padding: 40px 10px; line-height: 1.5; }
+  .item { background: var(--card); border-radius: 18px; margin: 14px 0; overflow: hidden; }
+  .meta { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); flex: none; }
+  .item.seen .dot { background: var(--seen); }
+  .note { flex: 1; font-size: 15px; line-height: 1.35; }
+  .from { color: var(--muted); font-size: 13px; }
+  .player { position: relative; width: 100%; aspect-ratio: 9 / 16; background: #000; }
+  .player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .tap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 10px; border: 0; width: 100%; background: #000; color: var(--text);
+    font-size: 16px; }
+  .play { width: 68px; height: 68px; border-radius: 50%; background: var(--accent);
+    display: flex; align-items: center; justify-content: center; }
+  .play::after { content: ""; margin-left: 6px; border-style: solid;
+    border-width: 13px 0 13px 22px; border-color: transparent transparent transparent #fff; }
+  .broken { padding: 18px 14px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>My Videos</h1>
+  <button id="refresh" type="button">Refresh</button>
+</header>
+<main id="list"><p class="status">Loading…</p></main>
+
+<script>
+/* ================== SETUP ==================
+   1. Make a Google Sheet. Row 1 headers: Link | Note | From
+   2. Share it as "Anyone with the link: Viewer".
+   3. Paste the long ID from its address bar here:
+      https://docs.google.com/spreadsheets/d/  THIS_PART  /edit
+*/
+const SHEET_ID = "1bKKAXUmcgJBoTrOnxtt9M0DX5lxjD63WE79VAIJX6KM";
+const SHEET_TAB = ""; // blank = first tab
+/* =========================================== */
+
+const listEl = document.getElementById("list");
+const SEEN_KEY = "seenVideos";
+const ID_CACHE_KEY = "videoIdCache";
+
+function load(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch (e) { return fallback; }
+}
+function save(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
+}
+let seen = load(SEEN_KEY, {});
+let idCache = load(ID_CACHE_KEY, {});
+
+// Minimal CSV parser (handles quotes and commas inside quotes)
+function parseCSV(text) {
+  const rows = []; let row = []; let cell = ""; let q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') q = false;
+      else cell += c;
+    } else if (c === '"') q = true;
+    else if (c === ",") { row.push(cell); cell = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell); rows.push(row); row = []; cell = "";
+    } else cell += c;
+  }
+  if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+// Only TikTok links are accepted; everything else is ignored.
+function isTikTok(url) {
+  try { return /(^|\.)tiktok\.com$/i.test(new URL(url).hostname); } catch (e) { return false; }
+}
+function idFromUrl(url) {
+  const m = url.match(/\/(?:video|photo|player\/v1|embed(?:\/v2)?)\/(\d{8,})/);
+  return m ? m[1] : null;
+}
+// Short links (tiktok.com/t/..., vm.tiktok.com/...) are resolved through TikTok's oEmbed endpoint.
+async function resolveId(url) {
+  const direct = idFromUrl(url);
+  if (direct) return direct;
+  if (idCache[url]) return idCache[url];
+  try {
+    const r = await fetch("https://www.tiktok.com/oembed?url=" + encodeURIComponent(url));
+    if (!r.ok) return null;
+    const j = await r.json();
+    const id = j.embed_product_id || (j.html && (j.html.match(/data-video-id="(\d+)"/) || [])[1]) || null;
+    if (id) { idCache[url] = id; save(ID_CACHE_KEY, idCache); }
+    return id;
+  } catch (e) { return null; }
+}
+
+function playerUrl(id) {
+  const p = new URLSearchParams({
+    rel: "0",            // no "related videos" at the end
+    music_info: "0",
+    description: "1",
+    native_context_menu: "0",
+    closed_caption: "1",
+    autoplay: "1"
+  });
+  return "https://www.tiktok.com/player/v1/" + id + "?" + p.toString();
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text) e.textContent = text;
+  return e;
+}
+
+function stopOthers(except) {
+  document.querySelectorAll(".player").forEach(p => {
+    if (p !== except && p.querySelector("iframe")) { p.innerHTML = ""; p.appendChild(p._tap); }
+  });
+}
+
+async function renderItem(entry) {
+  const item = el("div", "item" + (seen[entry.link] ? " seen" : ""));
+  const meta = el("div", "meta");
+  meta.appendChild(el("span", "dot"));
+  const noteWrap = el("div", "note");
+  noteWrap.appendChild(document.createTextNode(entry.note || "New video"));
+  if (entry.from) { noteWrap.appendChild(document.createElement("br")); noteWrap.appendChild(el("span", "from", "from " + entry.from)); }
+  meta.appendChild(noteWrap);
+  item.appendChild(meta);
+
+  const id = await resolveId(entry.link);
+  if (!id) {
+    item.appendChild(el("div", "broken", "This one couldn't load. Ask Mom or Dad to resend it."));
+    return item;
+  }
+  const player = el("div", "player");
+  const tap = el("button", "tap");
+  tap.type = "button";
+  tap.appendChild(el("span", "play"));
+  tap.appendChild(el("span", "", "Tap to watch"));
+  player._tap = tap;
+  player.appendChild(tap);
+  tap.addEventListener("click", () => {
+    stopOthers(player);
+    const f = document.createElement("iframe");
+    f.src = playerUrl(id);
+    f.allow = "autoplay; fullscreen; encrypted-media";
+    f.setAttribute("allowfullscreen", "");
+    f.title = "Video";
+    player.innerHTML = "";
+    player.appendChild(f);
+    seen[entry.link] = Date.now(); save(SEEN_KEY, seen);
+    item.classList.add("seen");
+  });
+  item.appendChild(player);
+  return item;
+}
+
+async function refresh() {
+  if (SHEET_ID.startsWith("PASTE_")) {
+    listEl.innerHTML = '<p class="status">Setup needed: add the Google Sheet ID in the file.</p>';
+    return;
+  }
+  listEl.innerHTML = '<p class="status">Loading…</p>';
+  try {
+    const url = "https://docs.google.com/spreadsheets/d/" + encodeURIComponent(SHEET_ID) +
+      "/gviz/tq?tqx=out:csv" + (SHEET_TAB ? "&sheet=" + encodeURIComponent(SHEET_TAB) : "") + "&_=" + Date.now();
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const rows = parseCSV(await r.text());
+    const entries = rows.slice(1) // skip header row
+      .map(c => ({ link: (c[0] || "").trim(), note: (c[1] || "").trim(), from: (c[2] || "").trim() }))
+      .filter(e => isTikTok(e.link))
+      .reverse(); // newest (bottom of sheet) first
+    if (!entries.length) {
+      listEl.innerHTML = '<p class="status">Nothing here yet. Videos from Mom and Dad will show up here.</p>';
+      return;
+    }
+    const items = await Promise.all(entries.map(renderItem));
+    listEl.innerHTML = "";
+    items.forEach(i => listEl.appendChild(i));
+  } catch (e) {
+    listEl.innerHTML = '<p class="status">Couldn\'t load videos. Check the internet connection and tap Refresh.</p>';
+  }
+}
+
+document.getElementById("refresh").addEventListener("click", refresh);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+refresh();
+</script>
+</body>
+</html>
