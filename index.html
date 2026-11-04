@@ -113,6 +113,8 @@
   <div id="navMain"></div>
   <h3 id="catHead">Categories</h3>
   <div id="navCats"></div>
+  <h3 id="creatorHead">Creators</h3>
+  <div id="navCreators"></div>
 </nav>
 
 <div id="player" role="dialog" aria-modal="true">
@@ -222,10 +224,19 @@ function inView(v, vw) {
   if (vw.type === "fav") return !!favs[v.link];
   if (vw.type === "cat") return v.cats.includes(vw.name);
   if (vw.type === "uncat") return v.cats.length === 0;
+  if (vw.type === "creator") return v.author === vw.name;
   return true;
 }
 function viewLabel(vw) {
+  if (vw.type === "creator") return "@" + vw.name;
   return { all: "All videos", new: "New", fav: "Favorites", uncat: "No category" }[vw.type] || vw.name;
+}
+function allCreators() {
+  const counts = {};
+  videos.forEach(v => { if (v.author) counts[v.author] = (counts[v.author] || 0) + 1; });
+  return Object.keys(counts)
+    .sort((a, b) => counts[b] - counts[a] || a.localeCompare(b))
+    .map(name => ({ name, n: counts[name] }));
 }
 function sameView(a, b) { return a.type === b.type && (a.name || "") === (b.name || ""); }
 function allCategories() {
@@ -264,6 +275,11 @@ function renderNav() {
   cats.forEach(c => box.appendChild(navButton({ type: "cat", name: c.name }, "#", c.name, c.n)));
   const unc = count({ type: "uncat" });
   if (cats.length && unc) box.appendChild(navButton({ type: "uncat" }, "○", "No category", unc));
+
+  const creators = allCreators();
+  const cbox = $("navCreators"); cbox.innerHTML = "";
+  $("creatorHead").style.display = creators.length ? "" : "none";
+  creators.forEach(c => cbox.appendChild(navButton({ type: "creator", name: c.name }, "@", c.name, c.n)));
 
   // Chips: same choices, quick to reach without opening the menu
   const chips = $("chips"); chips.innerHTML = "";
@@ -387,6 +403,7 @@ async function refresh() {
     videos = entries.map((e, i) => looked[i] ? Object.assign({}, e, looked[i]) : null).filter(Boolean);
     // If the saved view is a category that no longer exists, go back to All
     if (view.type === "cat" && !allCategories().some(c => c.name === view.name)) view = { type: "all" };
+    if (view.type === "creator" && !allCreators().some(c => c.name === view.name)) view = { type: "all" };
     renderNav(); renderGrid();
   } catch (e) {
     if (!videos.length) $("grid").innerHTML = '<p class="status">Couldn\'t load videos. Check the internet connection and tap Refresh.</p>';
