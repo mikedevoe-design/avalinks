@@ -42,6 +42,11 @@
     display: flex; align-items: center; justify-content: center; }
   .play::after { content: ""; margin-left: 6px; border-style: solid;
     border-width: 13px 0 13px 22px; border-color: transparent transparent transparent #fff; }
+  .section { font-size: 15px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .06em; margin: 22px 4px 4px; }
+  .item.creator .dot { background: #5ac8fa; }
+  .creatorbox { position: relative; width: 100%; height: 600px; background: #fff; }
+  .creatorbox iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
   .broken { padding: 18px 14px; color: var(--muted); font-size: 14px; }
 </style>
 </head>
@@ -65,7 +70,7 @@ const SHEET_TAB = ""; // blank = first tab
 
 const listEl = document.getElementById("list");
 const SEEN_KEY = "seenVideos";
-const ID_CACHE_KEY = "videoIdCache";
+const ID_CACHE_KEY = "linkCache2";
 
 function load(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch (e) { return fallback; }
@@ -104,19 +109,39 @@ function idFromUrl(url) {
   const m = url.match(/\/(?:video|photo|player\/v1|embed(?:\/v2)?)\/(\d{8,})/);
   return m ? m[1] : null;
 }
+// A profile link looks like tiktok.com/@username (no /video/ after it).
+function creatorFromUrl(url) {
+  const m = url.match(/tiktok\.com\/@([\w.\-]+)\/?(?:[?#].*)?$/i);
+  return m ? m[1] : null;
+}
+// Returns {kind: "video", id} or {kind: "creator", id: username}, or null.
 // Short links (tiktok.com/t/..., vm.tiktok.com/...) are resolved through TikTok's oEmbed endpoint.
-async function resolveId(url) {
-  const direct = idFromUrl(url);
-  if (direct) return direct;
+async function resolveLink(url) {
+  const vid = idFromUrl(url);
+  if (vid) return { kind: "video", id: vid };
+  const user = creatorFromUrl(url);
+  if (user) return { kind: "creator", id: user };
   if (idCache[url]) return idCache[url];
   try {
     const r = await fetch("https://www.tiktok.com/oembed?url=" + encodeURIComponent(url));
     if (!r.ok) return null;
     const j = await r.json();
-    const id = j.embed_product_id || (j.html && (j.html.match(/data-video-id="(\d+)"/) || [])[1]) || null;
-    if (id) { idCache[url] = id; save(ID_CACHE_KEY, idCache); }
-    return id;
+    const html = j.html || "";
+    let out = null;
+    if (/data-embed-type="creator"/.test(html)) {
+      const u = (html.match(/data-unique-id="([\w.\-]+)"/) || [])[1];
+      if (u) out = { kind: "creator", id: u };
+    } else {
+      const id = j.embed_product_id || (html.match(/data-video-id="(\d+)"/) || [])[1];
+      if (id) out = { kind: "video", id: id };
+    }
+    if (out) { idCache[url] = out; save(ID_CACHE_KEY, idCache); }
+    return out;
   } catch (e) { return null; }
+}
+
+function creatorEmbedUrl(username) {
+  return "https://www.tiktok.com/embed/@" + encodeURIComponent(username);
 }
 
 function playerUrl(id) {
@@ -154,11 +179,27 @@ async function renderItem(entry) {
   meta.appendChild(noteWrap);
   item.appendChild(meta);
 
-  const id = await resolveId(entry.link);
-  if (!id) {
+  const res = await resolveLink(entry.link);
+  if (!res) {
     item.appendChild(el("div", "broken", "This one couldn't load. Ask Mom or Dad to resend it."));
+    item._kind = "video";
     return item;
   }
+  item._kind = res.kind;
+  if (res.kind === "creator") {
+    item.className = "item creator";
+    noteWrap.firstChild.textContent = "@" + res.id + (entry.note ? " · " + entry.note : "");
+    const box = el("div", "creatorbox");
+    const f = document.createElement("iframe");
+    f.src = creatorEmbedUrl(res.id);
+    f.loading = "lazy";
+    f.allow = "autoplay; fullscreen; encrypted-media";
+    f.title = "Videos from @" + res.id;
+    box.appendChild(f);
+    item.appendChild(box);
+    return item;
+  }
+  const id = res.id;
   const player = el("div", "player");
   const tap = el("button", "tap");
   tap.type = "button";
@@ -203,8 +244,17 @@ async function refresh() {
       return;
     }
     const items = await Promise.all(entries.map(renderItem));
+    const creators = items.filter(i => i._kind === "creator");
+    const videos = items.filter(i => i._kind !== "creator");
     listEl.innerHTML = "";
-    items.forEach(i => listEl.appendChild(i));
+    if (creators.length) {
+      listEl.appendChild(el("h2", "section", "Creators"));
+      creators.forEach(i => listEl.appendChild(i));
+    }
+    if (videos.length) {
+      if (creators.length) listEl.appendChild(el("h2", "section", "Videos"));
+      videos.forEach(i => listEl.appendChild(i));
+    }
   } catch (e) {
     listEl.innerHTML = '<p class="status">Couldn\'t load videos. Check the internet connection and tap Refresh.</p>';
   }
