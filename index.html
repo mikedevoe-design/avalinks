@@ -45,8 +45,8 @@
   .section { font-size: 15px; font-weight: 600; color: var(--muted); text-transform: uppercase;
     letter-spacing: .06em; margin: 22px 4px 4px; }
   .item.creator .dot { background: #5ac8fa; }
-  .creatorbox { position: relative; width: 100%; height: 600px; background: #fff; }
-  .creatorbox iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .creatorbox { width: 100%; min-height: 200px; background: #fff; color: #333; padding: 0; }
+  .creatorbox section { padding: 20px 14px; font-size: 14px; }
   .broken { padding: 18px 14px; color: var(--muted); font-size: 14px; }
 </style>
 </head>
@@ -140,8 +140,16 @@ async function resolveLink(url) {
   } catch (e) { return null; }
 }
 
-function creatorEmbedUrl(username) {
-  return "https://www.tiktok.com/embed/@" + encodeURIComponent(username);
+// embed.js scans the page for .tiktok-embed blockquotes when it loads,
+// so it is re-added after each refresh to pick up new creator cards.
+function loadTikTokEmbedScript() {
+  const old = document.getElementById("tiktok-embed-js");
+  if (old) old.remove();
+  const s = document.createElement("script");
+  s.id = "tiktok-embed-js";
+  s.async = true;
+  s.src = "https://www.tiktok.com/embed.js?_=" + Date.now();
+  document.body.appendChild(s);
 }
 
 function playerUrl(id) {
@@ -189,13 +197,20 @@ async function renderItem(entry) {
   if (res.kind === "creator") {
     item.className = "item creator";
     noteWrap.firstChild.textContent = "@" + res.id + (entry.note ? " · " + entry.note : "");
+    // TikTok's official creator embed: a blockquote that embed.js turns into the profile card.
     const box = el("div", "creatorbox");
-    const f = document.createElement("iframe");
-    f.src = creatorEmbedUrl(res.id);
-    f.loading = "lazy";
-    f.allow = "autoplay; fullscreen; encrypted-media";
-    f.title = "Videos from @" + res.id;
-    box.appendChild(f);
+    const bq = document.createElement("blockquote");
+    bq.className = "tiktok-embed";
+    bq.setAttribute("cite", "https://www.tiktok.com/@" + res.id);
+    bq.setAttribute("data-unique-id", res.id);
+    bq.setAttribute("data-embed-type", "creator");
+    bq.style.maxWidth = "720px";
+    bq.style.minWidth = "288px";
+    bq.style.margin = "0";
+    const sec = document.createElement("section");
+    sec.appendChild(el("span", "", "Loading @" + res.id + "…"));
+    bq.appendChild(sec);
+    box.appendChild(bq);
     item.appendChild(box);
     return item;
   }
@@ -255,6 +270,7 @@ async function refresh() {
       if (creators.length) listEl.appendChild(el("h2", "section", "Videos"));
       videos.forEach(i => listEl.appendChild(i));
     }
+    if (creators.length) loadTikTokEmbedScript();
   } catch (e) {
     listEl.innerHTML = '<p class="status">Couldn\'t load videos. Check the internet connection and tap Refresh.</p>';
   }
