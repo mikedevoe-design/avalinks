@@ -139,6 +139,8 @@
 */
 const SHEET_ID = "1bKKAXUmcgJBoTrOnxtt9M0DX5lxjD63WE79VAIJX6KM";
 const SHEET_TAB = ""; // blank = first tab
+// Your Google Apps Script web app (also used by the Share shortcut). It looks up video details.
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxYW7z2kZsKCfcDeHLTSzj-CXgVUdBM8BypigA3ZfapdWCOHf5uo31ErNP532n-UHOXjQ/exec";
 /* =========================================== */
 
 const $ = id => document.getElementById(id);
@@ -148,7 +150,7 @@ const store = {
 };
 let seen = store.get("seenVideos", {});
 let favs = store.get("favVideos", {});
-let meta = store.get("videoMeta1", {});   // link -> {id, title, author, thumb, at}
+let meta = store.get("videoMeta2", {});   // link -> {id, title, author, thumb, at}
 let videos = [];                           // [{link, note, from, cats[], id, title, author, thumb}]
 let view = store.get("lastView", { type: "all" });
 let current = [];                          // videos in the current view, in order
@@ -189,25 +191,52 @@ function splitCats(s) {
     .map(x => x.charAt(0).toUpperCase() + x.slice(1));
 }
 
-// Looks up title, creator and thumbnail through TikTok's oEmbed endpoint (cached for a day,
-// because TikTok's thumbnail links expire). Also turns short links into a video ID.
+// Full links look like tiktok.com/@creator/video/123, so the creator can be read from the link.
+function authorFromUrl(url) {
+  const m = url.match(/tiktok\.com\/@([\w.\-]+)\//i);
+  return m ? m[1] : "";
+}
+
+// TikTok's oEmbed info (caption, creator, thumbnail). TikTok may refuse to answer a web page
+// directly, so the Google script fetches it for us as a fallback.
+async function fetchOembed(link) {
+  const sources = [
+    "https://www.tiktok.com/oembed?url=" + encodeURIComponent(link),
+    SCRIPT_URL ? SCRIPT_URL + "?meta=" + encodeURIComponent(link) : null
+  ].filter(Boolean);
+  for (const src of sources) {
+    try {
+      const r = await fetch(src);
+      if (!r.ok) continue;
+      const j = JSON.parse(await r.text());
+      if (j && (j.title || j.thumbnail_url || j.author_unique_id || j.html)) return j;
+    } catch (e) {}
+  }
+  return null;
+}
+
+// Looks up title, creator and thumbnail (cached for a day, because TikTok's thumbnail
+// links expire). Also turns short links into a video ID.
 async function lookup(link) {
   const cached = meta[link];
-  if (cached && cached.id && Date.now() - cached.at < 864e5) return cached;
-  const out = { id: idFromUrl(link) || (cached && cached.id) || null, title: "", author: "", thumb: "", at: Date.now() };
-  try {
-    const r = await fetch("https://www.tiktok.com/oembed?url=" + encodeURIComponent(link));
-    if (r.ok) {
-      const j = await r.json();
-      const html = j.html || "";
-      if (/data-embed-type="creator"/.test(html)) return null; // a profile, not a video
-      out.id = out.id || j.embed_product_id || (html.match(/data-video-id="(\d+)"/) || [])[1] || null;
-      out.title = j.title || "";
-      out.author = j.author_unique_id || j.author_name || "";
-      out.thumb = j.thumbnail_url || "";
-    }
-  } catch (e) {}
-  if (!out.id) return cached || null;
+  if (cached && cached.id && cached.ok && Date.now() - cached.at < 864e5) return cached;
+  const out = { id: idFromUrl(link) || (cached && cached.id) || null, title: "", author: authorFromUrl(link),
+    thumb: "", at: Date.now(), ok: false };
+  const j = await fetchOembed(link);
+  if (j) {
+    const html = j.html || "";
+    if (/data-embed-type="creator"/.test(html)) return null; // a profile, not a video
+    out.id = out.id || j.embed_product_id || (html.match(/data-video-id="(\d+)"/) || [])[1] || null;
+    out.title = j.title || "";
+    out.author = j.author_unique_id || out.author || j.author_name || "";
+    out.thumb = j.thumbnail_url || "";
+    out.ok = true;
+  } else if (cached) {
+    // Keep what we knew before (e.g. an ID resolved earlier) and retry the details next time.
+    out.title = cached.title || ""; out.thumb = cached.thumb || "";
+    out.author = out.author || cached.author || "";
+  }
+  if (!out.id) return null;
   meta[link] = out;
   return out;
 }
@@ -399,7 +428,7 @@ async function refresh() {
       .filter(e => isTikTok(e.link) && !isProfile(e.link) && !seenLinks.has(e.link) && seenLinks.add(e.link))
       .reverse(); // newest (bottom of sheet) first
     const looked = await Promise.all(entries.map(e => lookup(e.link)));
-    store.set("videoMeta1", meta);
+    store.set("videoMeta2", meta);
     videos = entries.map((e, i) => looked[i] ? Object.assign({}, e, looked[i]) : null).filter(Boolean);
     // If the saved view is a category that no longer exists, go back to All
     if (view.type === "cat" && !allCategories().some(c => c.name === view.name)) view = { type: "all" };
