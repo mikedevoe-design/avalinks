@@ -9,74 +9,153 @@
 <meta name="apple-mobile-web-app-title" content="My Videos">
 <title>My Videos</title>
 <style>
-  /* ============ SETUP: paste your Google Sheet ID below (in the script) ============ */
   :root {
-    --bg: #0f0f14; --card: #1b1b24; --text: #f4f4f8; --muted: #9a9aab;
-    --accent: #ff4f7b; --seen: #3a3a48;
+    --bg: #0f0f14; --panel: #17171f; --card: #1f1f2a; --line: #2c2c3a;
+    --text: #f4f4f8; --muted: #9a9aab; --accent: #ff4f7b; --accent2: #5ac8fa;
+    --top: env(safe-area-inset-top); --bottom: env(safe-area-inset-bottom);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Segoe UI, Roboto, sans-serif;
     -webkit-tap-highlight-color: transparent; }
-  header { position: sticky; top: 0; z-index: 5; background: rgba(15,15,20,.92);
-    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-    padding: calc(env(safe-area-inset-top) + 14px) 18px 12px;
-    display: flex; align-items: center; justify-content: space-between; }
-  h1 { margin: 0; font-size: 22px; font-weight: 700; }
-  #refresh { background: var(--card); color: var(--text); border: 0; border-radius: 999px;
-    padding: 8px 14px; font-size: 14px; }
-  main { padding: 8px 14px calc(env(safe-area-inset-bottom) + 30px); max-width: 520px; margin: 0 auto; }
-  .status { color: var(--muted); text-align: center; padding: 40px 10px; line-height: 1.5; }
-  .item { background: var(--card); border-radius: 18px; margin: 14px 0; overflow: hidden; }
-  .meta { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); flex: none; }
-  .item.seen .dot { background: var(--seen); }
-  .note { flex: 1; font-size: 15px; line-height: 1.35; }
-  .from { color: var(--muted); font-size: 13px; }
-  .player { position: relative; width: 100%; aspect-ratio: 9 / 16; background: #000; }
-  .player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-  .tap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    flex-direction: column; gap: 10px; border: 0; width: 100%; background: #000; color: var(--text);
-    font-size: 16px; }
-  .play { width: 68px; height: 68px; border-radius: 50%; background: var(--accent);
-    display: flex; align-items: center; justify-content: center; }
-  .play::after { content: ""; margin-left: 6px; border-style: solid;
-    border-width: 13px 0 13px 22px; border-color: transparent transparent transparent #fff; }
-  .broken { padding: 18px 14px; color: var(--muted); font-size: 14px; }
+  body.locked { overflow: hidden; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+
+  /* Header */
+  header { position: sticky; top: 0; z-index: 10; background: rgba(15,15,20,.92);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    padding: calc(var(--top) + 10px) 12px 10px; display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid var(--line); }
+  .iconbtn { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
+    background: var(--card); flex: none; }
+  .iconbtn svg { width: 22px; height: 22px; }
+  #viewTitle { flex: 1; font-size: 20px; font-weight: 700; margin: 0; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  #viewCount { color: var(--muted); font-weight: 500; font-size: 15px; margin-left: 6px; }
+
+  /* Quick filter chips under the header */
+  #chips { display: flex; gap: 8px; overflow-x: auto; padding: 10px 12px 2px; scrollbar-width: none; }
+  #chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; padding: 7px 13px; border-radius: 999px; background: var(--card);
+    font-size: 14px; color: var(--muted); white-space: nowrap; }
+  .chip.on { background: var(--text); color: #111; font-weight: 600; }
+
+  /* Grid */
+  main { padding: 10px 12px calc(var(--bottom) + 30px); max-width: 760px; margin: 0 auto; }
+  #grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  @media (min-width: 600px) { #grid { grid-template-columns: repeat(3, 1fr); } }
+  .card { position: relative; border-radius: 14px; overflow: hidden; background: var(--card);
+    text-align: left; display: block; width: 100%; }
+  .thumb { position: relative; aspect-ratio: 9 / 14; background: #000 center / cover no-repeat; }
+  .thumb.noimg { background: linear-gradient(160deg, #2a2a3a, #15151d); }
+  .thumb.noimg::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-40%, -50%);
+    border-style: solid; border-width: 16px 0 16px 26px; border-color: transparent transparent transparent rgba(255,255,255,.5); }
+  .badge-new { position: absolute; top: 8px; left: 8px; background: var(--accent); color: #fff;
+    font-size: 11px; font-weight: 700; padding: 3px 7px; border-radius: 6px; letter-spacing: .03em; }
+  .fav { position: absolute; top: 6px; right: 6px; width: 34px; height: 34px; border-radius: 50%;
+    background: rgba(0,0,0,.45); display: grid; place-items: center; }
+  .fav svg { width: 18px; height: 18px; }
+  .card .info { padding: 8px 10px 10px; }
+  .card .t { font-size: 14px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden; min-height: 2.6em; }
+  .card .sub { font-size: 12px; color: var(--muted); margin-top: 4px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .status { color: var(--muted); text-align: center; padding: 50px 16px; line-height: 1.5; grid-column: 1 / -1; }
+
+  /* Drawer (sidebar) */
+  #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); opacity: 0; pointer-events: none;
+    transition: opacity .2s; z-index: 20; }
+  #drawer { position: fixed; top: 0; bottom: 0; left: 0; width: min(80vw, 320px); background: var(--panel);
+    z-index: 21; transform: translateX(-102%); transition: transform .25s ease; overflow-y: auto;
+    padding: calc(var(--top) + 16px) 10px calc(var(--bottom) + 20px); border-right: 1px solid var(--line); }
+  body.menu-open #drawer { transform: none; }
+  body.menu-open #scrim { opacity: 1; pointer-events: auto; }
+  #drawer h2 { font-size: 22px; margin: 4px 10px 14px; }
+  #drawer h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+    margin: 20px 10px 6px; font-weight: 600; }
+  .navitem { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 10px;
+    border-radius: 10px; font-size: 16px; text-align: left; }
+  .navitem.on { background: var(--card); }
+  .navitem .ic { width: 24px; text-align: center; font-size: 17px; }
+  .navitem .n { margin-left: auto; color: var(--muted); font-size: 14px; }
+
+  /* Player overlay */
+  #player { position: fixed; inset: 0; z-index: 30; background: #000; display: none; flex-direction: column; }
+  #player.open { display: flex; }
+  .pbar { display: flex; align-items: center; gap: 10px; padding: calc(var(--top) + 8px) 10px 8px; }
+  .pbar .iconbtn { background: #1d1d26; }
+  #pTitle { flex: 1; font-size: 15px; line-height: 1.3; overflow: hidden; display: -webkit-box;
+    -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  #pFrame { flex: 1; position: relative; }
+  #pFrame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .pnav { display: flex; gap: 10px; padding: 10px 12px calc(var(--bottom) + 10px); }
+  .pnav button { flex: 1; padding: 13px; border-radius: 12px; background: #1d1d26; font-size: 15px; }
+  .pnav button:disabled { opacity: .35; }
 </style>
 </head>
 <body>
+
 <header>
-  <h1>My Videos</h1>
-  <button id="refresh" type="button">Refresh</button>
+  <button class="iconbtn" id="menuBtn" type="button" aria-label="Menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+  </button>
+  <h1 id="viewTitle">All videos<span id="viewCount"></span></h1>
+  <button class="iconbtn" id="refresh" type="button" aria-label="Refresh">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>
+  </button>
 </header>
-<main id="list"><p class="status">Loading…</p></main>
+<div id="chips"></div>
+<main><div id="grid"><p class="status">Loading…</p></div></main>
+
+<div id="scrim"></div>
+<nav id="drawer" aria-label="Video lists">
+  <h2>My Videos</h2>
+  <div id="navMain"></div>
+  <h3 id="catHead">Categories</h3>
+  <div id="navCats"></div>
+</nav>
+
+<div id="player" role="dialog" aria-modal="true">
+  <div class="pbar">
+    <button class="iconbtn" id="pClose" type="button" aria-label="Close">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div id="pTitle"></div>
+    <button class="iconbtn" id="pFav" type="button" aria-label="Favorite"></button>
+  </div>
+  <div id="pFrame"></div>
+  <div class="pnav">
+    <button id="pPrev" type="button">‹ Previous</button>
+    <button id="pNext" type="button">Next ›</button>
+  </div>
+</div>
 
 <script>
 /* ================== SETUP ==================
-   1. Make a Google Sheet. Row 1 headers: Link | Note | From
-   2. Share it as "Anyone with the link: Viewer".
-   3. Paste the long ID from its address bar here:
-      https://docs.google.com/spreadsheets/d/  THIS_PART  /edit
+   Google Sheet columns (row 1 is headers):
+     A: Link   B: Note   C: From   D: Category (optional, e.g. "Funny" or "Funny, Animals")
 */
 const SHEET_ID = "1bKKAXUmcgJBoTrOnxtt9M0DX5lxjD63WE79VAIJX6KM";
 const SHEET_TAB = ""; // blank = first tab
 /* =========================================== */
 
-const listEl = document.getElementById("list");
-const SEEN_KEY = "seenVideos";
-const ID_CACHE_KEY = "linkCache2";
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+};
+let seen = store.get("seenVideos", {});
+let favs = store.get("favVideos", {});
+let meta = store.get("videoMeta1", {});   // link -> {id, title, author, thumb, at}
+let videos = [];                           // [{link, note, from, cats[], id, title, author, thumb}]
+let view = store.get("lastView", { type: "all" });
+let current = [];                          // videos in the current view, in order
+let playingIndex = -1;
 
-function load(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch (e) { return fallback; }
-}
-function save(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
-}
-let seen = load(SEEN_KEY, {});
-let idCache = load(ID_CACHE_KEY, {});
+const HEART_ON = '<svg viewBox="0 0 24 24" fill="#ff4f7b"><path d="M12 21s-7.5-4.6-9.6-9.2C.9 8.4 3 4.5 6.9 4.5c2.1 0 3.6 1.1 5.1 3 1.5-1.9 3-3 5.1-3 3.9 0 6 3.9 4.5 7.3C19.5 16.4 12 21 12 21z"/></svg>';
+const HEART_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 21s-7.5-4.6-9.6-9.2C.9 8.4 3 4.5 6.9 4.5c2.1 0 3.6 1.1 5.1 3 1.5-1.9 3-3 5.1-3 3.9 0 6 3.9 4.5 7.3C19.5 16.4 12 21 12 21z"/></svg>';
 
-// Minimal CSV parser (handles quotes and commas inside quotes)
+/* ---------- Sheet + TikTok helpers ---------- */
 function parseCSV(text) {
   const rows = []; let row = []; let cell = ""; let q = false;
   for (let i = 0; i < text.length; i++) {
@@ -95,131 +174,225 @@ function parseCSV(text) {
   if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
   return rows;
 }
-
-// Only TikTok links are accepted; everything else is ignored.
 function isTikTok(url) {
   try { return /(^|\.)tiktok\.com$/i.test(new URL(url).hostname); } catch (e) { return false; }
 }
+function isProfile(url) { return /tiktok\.com\/@[\w.\-]+\/?(?:[?#].*)?$/i.test(url); }
 function idFromUrl(url) {
   const m = url.match(/\/(?:video|photo|player\/v1|embed(?:\/v2)?)\/(\d{8,})/);
   return m ? m[1] : null;
 }
-// Returns the video ID, or null. Only single videos are supported; profile links are ignored.
-// Short links (tiktok.com/t/..., vm.tiktok.com/...) are resolved through TikTok's oEmbed endpoint.
-async function resolveId(url) {
-  const direct = idFromUrl(url);
-  if (direct) return direct;
-  if (/tiktok\.com\/@[\w.\-]+\/?(?:[?#].*)?$/i.test(url)) return "PROFILE";
-  if (idCache[url]) return idCache[url];
+function splitCats(s) {
+  return (s || "").split(/[,;\/]/).map(x => x.trim()).filter(Boolean)
+    .map(x => x.charAt(0).toUpperCase() + x.slice(1));
+}
+
+// Looks up title, creator and thumbnail through TikTok's oEmbed endpoint (cached for a day,
+// because TikTok's thumbnail links expire). Also turns short links into a video ID.
+async function lookup(link) {
+  const cached = meta[link];
+  if (cached && cached.id && Date.now() - cached.at < 864e5) return cached;
+  const out = { id: idFromUrl(link) || (cached && cached.id) || null, title: "", author: "", thumb: "", at: Date.now() };
   try {
-    const r = await fetch("https://www.tiktok.com/oembed?url=" + encodeURIComponent(url));
-    if (!r.ok) return null;
-    const j = await r.json();
-    const html = j.html || "";
-    if (/data-embed-type="creator"/.test(html)) { idCache[url] = "PROFILE"; save(ID_CACHE_KEY, idCache); return "PROFILE"; }
-    const id = j.embed_product_id || (html.match(/data-video-id="(\d+)"/) || [])[1] || null;
-    if (id) { idCache[url] = id; save(ID_CACHE_KEY, idCache); }
-    return id;
-  } catch (e) { return null; }
+    const r = await fetch("https://www.tiktok.com/oembed?url=" + encodeURIComponent(link));
+    if (r.ok) {
+      const j = await r.json();
+      const html = j.html || "";
+      if (/data-embed-type="creator"/.test(html)) return null; // a profile, not a video
+      out.id = out.id || j.embed_product_id || (html.match(/data-video-id="(\d+)"/) || [])[1] || null;
+      out.title = j.title || "";
+      out.author = j.author_unique_id || j.author_name || "";
+      out.thumb = j.thumbnail_url || "";
+    }
+  } catch (e) {}
+  if (!out.id) return cached || null;
+  meta[link] = out;
+  return out;
 }
 
 function playerUrl(id) {
-  const p = new URLSearchParams({
-    rel: "0",            // no "related videos" at the end
-    music_info: "0",
-    description: "1",
-    native_context_menu: "0",
-    closed_caption: "1",
-    autoplay: "1"
-  });
+  const p = new URLSearchParams({ rel: "0", music_info: "0", description: "1",
+    native_context_menu: "0", closed_caption: "1", autoplay: "1" });
   return "https://www.tiktok.com/player/v1/" + id + "?" + p.toString();
+}
+
+/* ---------- Views ---------- */
+function inView(v, vw) {
+  if (vw.type === "new") return !seen[v.link];
+  if (vw.type === "fav") return !!favs[v.link];
+  if (vw.type === "cat") return v.cats.includes(vw.name);
+  if (vw.type === "uncat") return v.cats.length === 0;
+  return true;
+}
+function viewLabel(vw) {
+  return { all: "All videos", new: "New", fav: "Favorites", uncat: "No category" }[vw.type] || vw.name;
+}
+function sameView(a, b) { return a.type === b.type && (a.name || "") === (b.name || ""); }
+function allCategories() {
+  const counts = {};
+  videos.forEach(v => v.cats.forEach(c => counts[c] = (counts[c] || 0) + 1));
+  return Object.keys(counts).sort((a, b) => a.localeCompare(b)).map(name => ({ name, n: counts[name] }));
 }
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
-  if (text) e.textContent = text;
+  if (text != null) e.textContent = text;
   return e;
 }
 
-function stopOthers(except) {
-  document.querySelectorAll(".player").forEach(p => {
-    if (p !== except && p.querySelector("iframe")) { p.innerHTML = ""; p.appendChild(p._tap); }
+function navButton(vw, icon, label, n) {
+  const b = el("button", "navitem" + (sameView(vw, view) ? " on" : ""));
+  b.type = "button";
+  b.appendChild(el("span", "ic", icon));
+  b.appendChild(el("span", "", label));
+  b.appendChild(el("span", "n", String(n)));
+  b.addEventListener("click", () => { setView(vw); closeMenu(); });
+  return b;
+}
+
+function renderNav() {
+  const count = vw => videos.filter(v => inView(v, vw)).length;
+  const main = $("navMain"); main.innerHTML = "";
+  main.appendChild(navButton({ type: "all" }, "▦", "All videos", videos.length));
+  main.appendChild(navButton({ type: "new" }, "●", "New", count({ type: "new" })));
+  main.appendChild(navButton({ type: "fav" }, "♥", "Favorites", count({ type: "fav" })));
+
+  const cats = allCategories();
+  const box = $("navCats"); box.innerHTML = "";
+  $("catHead").style.display = cats.length ? "" : "none";
+  cats.forEach(c => box.appendChild(navButton({ type: "cat", name: c.name }, "#", c.name, c.n)));
+  const unc = count({ type: "uncat" });
+  if (cats.length && unc) box.appendChild(navButton({ type: "uncat" }, "○", "No category", unc));
+
+  // Chips: same choices, quick to reach without opening the menu
+  const chips = $("chips"); chips.innerHTML = "";
+  const chipList = [{ type: "all" }, { type: "new" }, { type: "fav" }].concat(cats.map(c => ({ type: "cat", name: c.name })));
+  chipList.forEach(vw => {
+    const c = el("button", "chip" + (sameView(vw, view) ? " on" : ""), viewLabel(vw));
+    c.type = "button";
+    c.addEventListener("click", () => setView(vw));
+    chips.appendChild(c);
   });
 }
 
-async function renderItem(entry) {
-  const item = el("div", "item" + (seen[entry.link] ? " seen" : ""));
-  const meta = el("div", "meta");
-  meta.appendChild(el("span", "dot"));
-  const noteWrap = el("div", "note");
-  noteWrap.appendChild(document.createTextNode(entry.note || "New video"));
-  if (entry.from) { noteWrap.appendChild(document.createElement("br")); noteWrap.appendChild(el("span", "from", "from " + entry.from)); }
-  meta.appendChild(noteWrap);
-  item.appendChild(meta);
-
-  const id = await resolveId(entry.link);
-  if (id === "PROFILE") return null; // profile links aren't supported; skip them
-  if (!id) {
-    item.appendChild(el("div", "broken", "This one couldn't load. Ask Mom or Dad to resend it."));
-    return item;
+function renderGrid() {
+  current = videos.filter(v => inView(v, view));
+  $("viewTitle").firstChild.textContent = viewLabel(view);
+  $("viewCount").textContent = current.length ? String(current.length) : "";
+  const grid = $("grid"); grid.innerHTML = "";
+  if (!videos.length) { grid.appendChild(el("p", "status", "Nothing here yet. Videos from Mom and Dad will show up here.")); return; }
+  if (!current.length) {
+    const msg = view.type === "fav" ? "No favorites yet. Tap the heart on a video to save it here."
+      : view.type === "new" ? "You're all caught up!" : "No videos here yet.";
+    grid.appendChild(el("p", "status", msg)); return;
   }
-  const player = el("div", "player");
-  const tap = el("button", "tap");
-  tap.type = "button";
-  tap.appendChild(el("span", "play"));
-  tap.appendChild(el("span", "", "Tap to watch"));
-  player._tap = tap;
-  player.appendChild(tap);
-  tap.addEventListener("click", () => {
-    stopOthers(player);
-    const f = document.createElement("iframe");
-    f.src = playerUrl(id);
-    f.allow = "autoplay; fullscreen; encrypted-media";
-    f.setAttribute("allowfullscreen", "");
-    f.title = "Video";
-    player.innerHTML = "";
-    player.appendChild(f);
-    seen[entry.link] = Date.now(); save(SEEN_KEY, seen);
-    item.classList.add("seen");
-  });
-  item.appendChild(player);
-  return item;
+  current.forEach((v, i) => grid.appendChild(card(v, i)));
 }
 
+function card(v, i) {
+  const c = el("div", "card");
+  const open = el("button", "");
+  open.type = "button"; open.style.width = "100%"; open.style.textAlign = "left";
+  const th = el("div", "thumb");
+  if (v.thumb) {
+    th.style.backgroundImage = "url(\"" + v.thumb.replace(/"/g, "%22") + "\")";
+    const probe = new Image(); probe.onerror = () => { th.style.backgroundImage = ""; th.classList.add("noimg"); }; probe.src = v.thumb;
+  } else th.classList.add("noimg");
+  if (!seen[v.link]) th.appendChild(el("span", "badge-new", "NEW"));
+  open.appendChild(th);
+  const info = el("div", "info");
+  info.appendChild(el("div", "t", v.note || v.title || "Video"));
+  const subBits = [];
+  if (v.author) subBits.push("@" + v.author);
+  if (v.from) subBits.push("from " + v.from);
+  info.appendChild(el("div", "sub", subBits.join(" · ") || " "));
+  open.appendChild(info);
+  open.addEventListener("click", () => play(i));
+  c.appendChild(open);
+
+  const f = el("button", "fav"); f.type = "button";
+  f.setAttribute("aria-label", favs[v.link] ? "Remove from favorites" : "Add to favorites");
+  f.innerHTML = favs[v.link] ? HEART_ON : HEART_OFF;
+  f.addEventListener("click", e => { e.stopPropagation(); toggleFav(v); });
+  c.appendChild(f);
+  return c;
+}
+
+function setView(vw) { view = vw; store.set("lastView", vw); renderNav(); renderGrid(); window.scrollTo(0, 0); }
+function toggleFav(v) {
+  if (favs[v.link]) delete favs[v.link]; else favs[v.link] = Date.now();
+  store.set("favVideos", favs);
+  renderNav();
+  if (!$("player").classList.contains("open")) renderGrid();
+  updatePlayerFav();
+}
+
+/* ---------- Menu ---------- */
+function openMenu() { document.body.classList.add("menu-open"); }
+function closeMenu() { document.body.classList.remove("menu-open"); }
+$("menuBtn").addEventListener("click", openMenu);
+$("scrim").addEventListener("click", closeMenu);
+
+/* ---------- Player ---------- */
+function play(i) {
+  if (i < 0 || i >= current.length) return;
+  playingIndex = i;
+  const v = current[i];
+  const f = document.createElement("iframe");
+  f.src = playerUrl(v.id);
+  f.allow = "autoplay; fullscreen; encrypted-media";
+  f.setAttribute("allowfullscreen", "");
+  f.title = "Video";
+  $("pFrame").innerHTML = ""; $("pFrame").appendChild(f);
+  $("pTitle").textContent = v.note || v.title || "";
+  $("pPrev").disabled = i === 0;
+  $("pNext").disabled = i === current.length - 1;
+  updatePlayerFav();
+  $("player").classList.add("open"); document.body.classList.add("locked");
+  if (!seen[v.link]) { seen[v.link] = Date.now(); store.set("seenVideos", seen); }
+}
+function updatePlayerFav() {
+  const v = current[playingIndex]; if (!v) return;
+  $("pFav").innerHTML = favs[v.link] ? HEART_ON : HEART_OFF;
+  $("pFav").setAttribute("aria-label", favs[v.link] ? "Remove from favorites" : "Add to favorites");
+}
+function closePlayer() {
+  $("player").classList.remove("open"); document.body.classList.remove("locked");
+  $("pFrame").innerHTML = ""; playingIndex = -1;
+  renderNav(); renderGrid();
+}
+$("pClose").addEventListener("click", closePlayer);
+$("pPrev").addEventListener("click", () => play(playingIndex - 1));
+$("pNext").addEventListener("click", () => play(playingIndex + 1));
+$("pFav").addEventListener("click", () => { const v = current[playingIndex]; if (v) toggleFav(v); });
+
+/* ---------- Load ---------- */
 async function refresh() {
-  if (SHEET_ID.startsWith("PASTE_")) {
-    listEl.innerHTML = '<p class="status">Setup needed: add the Google Sheet ID in the file.</p>';
-    return;
-  }
-  listEl.innerHTML = '<p class="status">Loading…</p>';
+  if ($("player").classList.contains("open")) return; // don't interrupt a video
+  if (!videos.length) $("grid").innerHTML = '<p class="status">Loading…</p>';
   try {
     const url = "https://docs.google.com/spreadsheets/d/" + encodeURIComponent(SHEET_ID) +
       "/gviz/tq?tqx=out:csv" + (SHEET_TAB ? "&sheet=" + encodeURIComponent(SHEET_TAB) : "") + "&_=" + Date.now();
     const r = await fetch(url, { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
-    const rows = parseCSV(await r.text());
-    const entries = rows.slice(1) // skip header row
-      .map(c => ({ link: (c[0] || "").trim(), note: (c[1] || "").trim(), from: (c[2] || "").trim() }))
-      .filter(e => isTikTok(e.link))
+    const rows = parseCSV(await r.text()).slice(1);
+    const seenLinks = new Set();
+    const entries = rows
+      .map(c => ({ link: (c[0] || "").trim(), note: (c[1] || "").trim(), from: (c[2] || "").trim(), cats: splitCats(c[3]) }))
+      .filter(e => isTikTok(e.link) && !isProfile(e.link) && !seenLinks.has(e.link) && seenLinks.add(e.link))
       .reverse(); // newest (bottom of sheet) first
-    if (!entries.length) {
-      listEl.innerHTML = '<p class="status">Nothing here yet. Videos from Mom and Dad will show up here.</p>';
-      return;
-    }
-    const items = (await Promise.all(entries.map(renderItem))).filter(Boolean);
-    if (!items.length) {
-      listEl.innerHTML = '<p class="status">Nothing here yet. Videos from Mom and Dad will show up here.</p>';
-      return;
-    }
-    listEl.innerHTML = "";
-    items.forEach(i => listEl.appendChild(i));
+    const looked = await Promise.all(entries.map(e => lookup(e.link)));
+    store.set("videoMeta1", meta);
+    videos = entries.map((e, i) => looked[i] ? Object.assign({}, e, looked[i]) : null).filter(Boolean);
+    // If the saved view is a category that no longer exists, go back to All
+    if (view.type === "cat" && !allCategories().some(c => c.name === view.name)) view = { type: "all" };
+    renderNav(); renderGrid();
   } catch (e) {
-    listEl.innerHTML = '<p class="status">Couldn\'t load videos. Check the internet connection and tap Refresh.</p>';
+    if (!videos.length) $("grid").innerHTML = '<p class="status">Couldn\'t load videos. Check the internet connection and tap Refresh.</p>';
   }
 }
-
-document.getElementById("refresh").addEventListener("click", refresh);
+$("refresh").addEventListener("click", refresh);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 refresh();
 </script>
