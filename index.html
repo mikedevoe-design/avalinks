@@ -42,11 +42,6 @@
     display: flex; align-items: center; justify-content: center; }
   .play::after { content: ""; margin-left: 6px; border-style: solid;
     border-width: 13px 0 13px 22px; border-color: transparent transparent transparent #fff; }
-  .section { font-size: 15px; font-weight: 600; color: var(--muted); text-transform: uppercase;
-    letter-spacing: .06em; margin: 22px 4px 4px; }
-  .item.creator .dot { background: #5ac8fa; }
-  .creatorbox { width: 100%; min-height: 200px; background: #fff; color: #333; padding: 0; }
-  .creatorbox section { padding: 20px 14px; font-size: 14px; }
   .broken { padding: 18px 14px; color: var(--muted); font-size: 14px; }
 </style>
 </head>
@@ -109,47 +104,23 @@ function idFromUrl(url) {
   const m = url.match(/\/(?:video|photo|player\/v1|embed(?:\/v2)?)\/(\d{8,})/);
   return m ? m[1] : null;
 }
-// A profile link looks like tiktok.com/@username (no /video/ after it).
-function creatorFromUrl(url) {
-  const m = url.match(/tiktok\.com\/@([\w.\-]+)\/?(?:[?#].*)?$/i);
-  return m ? m[1] : null;
-}
-// Returns {kind: "video", id} or {kind: "creator", id: username}, or null.
+// Returns the video ID, or null. Only single videos are supported; profile links are ignored.
 // Short links (tiktok.com/t/..., vm.tiktok.com/...) are resolved through TikTok's oEmbed endpoint.
-async function resolveLink(url) {
-  const vid = idFromUrl(url);
-  if (vid) return { kind: "video", id: vid };
-  const user = creatorFromUrl(url);
-  if (user) return { kind: "creator", id: user };
+async function resolveId(url) {
+  const direct = idFromUrl(url);
+  if (direct) return direct;
+  if (/tiktok\.com\/@[\w.\-]+\/?(?:[?#].*)?$/i.test(url)) return "PROFILE";
   if (idCache[url]) return idCache[url];
   try {
     const r = await fetch("https://www.tiktok.com/oembed?url=" + encodeURIComponent(url));
     if (!r.ok) return null;
     const j = await r.json();
     const html = j.html || "";
-    let out = null;
-    if (/data-embed-type="creator"/.test(html)) {
-      const u = (html.match(/data-unique-id="([\w.\-]+)"/) || [])[1];
-      if (u) out = { kind: "creator", id: u };
-    } else {
-      const id = j.embed_product_id || (html.match(/data-video-id="(\d+)"/) || [])[1];
-      if (id) out = { kind: "video", id: id };
-    }
-    if (out) { idCache[url] = out; save(ID_CACHE_KEY, idCache); }
-    return out;
+    if (/data-embed-type="creator"/.test(html)) { idCache[url] = "PROFILE"; save(ID_CACHE_KEY, idCache); return "PROFILE"; }
+    const id = j.embed_product_id || (html.match(/data-video-id="(\d+)"/) || [])[1] || null;
+    if (id) { idCache[url] = id; save(ID_CACHE_KEY, idCache); }
+    return id;
   } catch (e) { return null; }
-}
-
-// embed.js scans the page for .tiktok-embed blockquotes when it loads,
-// so it is re-added after each refresh to pick up new creator cards.
-function loadTikTokEmbedScript() {
-  const old = document.getElementById("tiktok-embed-js");
-  if (old) old.remove();
-  const s = document.createElement("script");
-  s.id = "tiktok-embed-js";
-  s.async = true;
-  s.src = "https://www.tiktok.com/embed.js?_=" + Date.now();
-  document.body.appendChild(s);
 }
 
 function playerUrl(id) {
@@ -187,34 +158,12 @@ async function renderItem(entry) {
   meta.appendChild(noteWrap);
   item.appendChild(meta);
 
-  const res = await resolveLink(entry.link);
-  if (!res) {
+  const id = await resolveId(entry.link);
+  if (id === "PROFILE") return null; // profile links aren't supported; skip them
+  if (!id) {
     item.appendChild(el("div", "broken", "This one couldn't load. Ask Mom or Dad to resend it."));
-    item._kind = "video";
     return item;
   }
-  item._kind = res.kind;
-  if (res.kind === "creator") {
-    item.className = "item creator";
-    noteWrap.firstChild.textContent = "@" + res.id + (entry.note ? " · " + entry.note : "");
-    // TikTok's official creator embed: a blockquote that embed.js turns into the profile card.
-    const box = el("div", "creatorbox");
-    const bq = document.createElement("blockquote");
-    bq.className = "tiktok-embed";
-    bq.setAttribute("cite", "https://www.tiktok.com/@" + res.id);
-    bq.setAttribute("data-unique-id", res.id);
-    bq.setAttribute("data-embed-type", "creator");
-    bq.style.maxWidth = "720px";
-    bq.style.minWidth = "288px";
-    bq.style.margin = "0";
-    const sec = document.createElement("section");
-    sec.appendChild(el("span", "", "Loading @" + res.id + "…"));
-    bq.appendChild(sec);
-    box.appendChild(bq);
-    item.appendChild(box);
-    return item;
-  }
-  const id = res.id;
   const player = el("div", "player");
   const tap = el("button", "tap");
   tap.type = "button";
@@ -258,19 +207,13 @@ async function refresh() {
       listEl.innerHTML = '<p class="status">Nothing here yet. Videos from Mom and Dad will show up here.</p>';
       return;
     }
-    const items = await Promise.all(entries.map(renderItem));
-    const creators = items.filter(i => i._kind === "creator");
-    const videos = items.filter(i => i._kind !== "creator");
+    const items = (await Promise.all(entries.map(renderItem))).filter(Boolean);
+    if (!items.length) {
+      listEl.innerHTML = '<p class="status">Nothing here yet. Videos from Mom and Dad will show up here.</p>';
+      return;
+    }
     listEl.innerHTML = "";
-    if (creators.length) {
-      listEl.appendChild(el("h2", "section", "Creators"));
-      creators.forEach(i => listEl.appendChild(i));
-    }
-    if (videos.length) {
-      if (creators.length) listEl.appendChild(el("h2", "section", "Videos"));
-      videos.forEach(i => listEl.appendChild(i));
-    }
-    if (creators.length) loadTikTokEmbedScript();
+    items.forEach(i => listEl.appendChild(i));
   } catch (e) {
     listEl.innerHTML = '<p class="status">Couldn\'t load videos. Check the internet connection and tap Refresh.</p>';
   }
