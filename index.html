@@ -124,6 +124,8 @@
     background: rgba(40,20,36,.85); display: grid; place-items: center; }
   .pside svg { width: 24px; height: 24px; }
   .pside button:disabled { opacity: .3; }
+  .pside .speed { font-size: 16px; font-weight: 800; }
+  .pside .speed.on { background: var(--accent); color: #fff; }
 </style>
 </head>
 <body>
@@ -172,6 +174,7 @@
     <button class="pill" id="pAuto" type="button">Auto-next</button>
   </div>
   <div class="pside">
+    <button id="pSpeed" class="speed" type="button" aria-label="Playback speed">1x</button>
     <button id="pFav" type="button" aria-label="Favorite"></button>
     <button id="pUp" type="button" aria-label="Previous video">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>
@@ -200,7 +203,7 @@ const store = {
 };
 let seen = store.get("seenVideos", {});
 let favs = store.get("favVideos", {});
-let meta = store.get("videoMeta2", {});   // link -> {id, title, author, thumb, at, ok}
+let meta = store.get("videoMeta3", {});   // link -> {id, title, author, thumb, at, ok}
 let autoNext = store.get("autoNext", true);
 let videos = [];                           // [{link, note, from, cats[], id, title, author, thumb}]
 let view = store.get("lastView", { type: "all" });
@@ -230,8 +233,18 @@ function parseCSV(text) {
   if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
   return rows;
 }
-function isTikTok(url) {
-  try { return /(^|\.)tiktok\.com$/i.test(new URL(url).hostname); } catch (e) { return false; }
+function hostOf(url) { try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ""; } }
+function isTikTok(url) { return /(^|\.)tiktok\.com$/.test(hostOf(url)); }
+function isYouTube(url) { return /(^|\.)(youtube\.com|youtu\.be)$/.test(hostOf(url)); }
+function platformOf(url) { return isTikTok(url) ? "tiktok" : isYouTube(url) ? "youtube" : null; }
+// youtu.be/ID, youtube.com/watch?v=ID, /shorts/ID, /embed/ID, /live/ID
+function ytIdFromUrl(url) {
+  let u; try { u = new URL(url); } catch (e) { return null; }
+  const ok = id => (id && /^[\w-]{11}$/.test(id) ? id : null);
+  if (/(^|\.)youtu\.be$/i.test(u.hostname)) return ok(u.pathname.split("/")[1]);
+  const v = u.searchParams.get("v"); if (v) return ok(v);
+  const m = u.pathname.match(/^\/(?:shorts|embed|live|v)\/([\w-]{11})/);
+  return m ? m[1] : null;
 }
 function isProfile(url) { return /tiktok\.com\/@[\w.\-]+\/?(?:[?#].*)?$/i.test(url); }
 function idFromUrl(url) {
@@ -262,9 +275,12 @@ const scriptQueue = limiter(4);
 
 // TikTok's oEmbed info (caption, creator, thumbnail). TikTok may refuse a web page
 // directly, so the Google script fetches it as a fallback.
-async function fetchOembed(link) {
+async function fetchOembed(link, platform) {
+  const direct = platform === "youtube"
+    ? "https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent(link)
+    : "https://www.tiktok.com/oembed?url=" + encodeURIComponent(link);
   try {
-    const r = await fetch("https://www.tiktok.com/oembed?url=" + encodeURIComponent(link));
+    const r = await fetch(direct);
     if (r.ok) { const j = await r.json(); if (j && (j.title || j.thumbnail_url || j.html)) return j; }
   } catch (e) {}
   if (!SCRIPT_URL) return null;
@@ -277,25 +293,44 @@ async function fetchOembed(link) {
 }
 
 // Looks up title, creator and thumbnail (cached for a day; TikTok's picture links expire).
-async function lookup(link) {
+// `who` is the creator as shown on her page: "@handle" for TikTok, the channel for YouTube.
+async function lookup(link, platform) {
   const cached = meta[link];
   if (cached && cached.id && cached.ok && Date.now() - cached.at < 864e5) return cached;
-  const out = { id: idFromUrl(link) || (cached && cached.id) || null, title: "", author: authorFromUrl(link),
-    thumb: "", at: Date.now(), ok: false };
-  const j = await fetchOembed(link);
+  if (platform === "youtube") return lookupYouTube(link, cached);
+  const fromUrl = authorFromUrl(link);
+  const out = { platform: "tiktok", id: idFromUrl(link) || (cached && cached.id) || null, title: "",
+    who: fromUrl ? "@" + fromUrl : "", thumb: "", at: Date.now(), ok: false };
+  const j = await fetchOembed(link, "tiktok");
   if (j) {
     const html = j.html || "";
     if (/data-embed-type="creator"/.test(html)) return null; // a profile, not a video
     out.id = out.id || j.embed_product_id || (html.match(/data-video-id="(\d+)"/) || [])[1] || null;
     out.title = j.title || "";
-    out.author = j.author_unique_id || out.author || j.author_name || "";
+    const handle = j.author_unique_id || fromUrl;
+    out.who = handle ? "@" + handle : (j.author_name || "");
     out.thumb = j.thumbnail_url || "";
     out.ok = true;
   } else if (cached) {
     out.title = cached.title || ""; out.thumb = cached.thumb || "";
-    out.author = out.author || cached.author || "";
+    out.who = out.who || cached.who || "";
   }
   if (!out.id) return null;
+  meta[link] = out;
+  return out;
+}
+async function lookupYouTube(link, cached) {
+  const id = ytIdFromUrl(link);
+  if (!id) return null; // a channel or playlist, not a single video
+  const out = { platform: "youtube", id, title: "", who: "",
+    thumb: "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg", at: Date.now(), ok: false };
+  const j = await fetchOembed(link, "youtube");
+  if (j) {
+    out.title = j.title || "";
+    const handle = (String(j.author_url || "").match(/youtube\.com\/(@[\w.\-]+)/i) || [])[1];
+    out.who = handle || j.author_name || "";
+    out.ok = true;
+  } else if (cached) { out.title = cached.title || ""; out.who = cached.who || ""; }
   meta[link] = out;
   return out;
 }
@@ -327,18 +362,24 @@ function setPicture(box, v) {
   };
   box._load = () => {
     if (picCache[v.link]) return viaScript();
-    if (!v.thumb) return viaScript();
+    if (!v.thumb) return v.platform === "youtube" ? fallback() : viaScript();
     const img = new Image(); img.alt = ""; img.referrerPolicy = "no-referrer"; img.decoding = "async";
-    img.onerror = () => { img.remove(); viaScript(); };
+    img.onerror = () => { img.remove(); if (v.platform === "youtube") fallback(); else viaScript(); };
     img.src = v.thumb; box.appendChild(img);
   };
   if (lazyPics) lazyPics.observe(box); else box._load();
 }
 
-function playerUrl(id) {
+function playerUrl(v) {
+  if (v.platform === "youtube") {
+    const p = new URLSearchParams({ autoplay: "1", playsinline: "1", rel: "0", modestbranding: "1",
+      iv_load_policy: "3", enablejsapi: "1" });
+    if (/^https?:$/.test(location.protocol)) p.set("origin", location.origin);
+    return "https://www.youtube-nocookie.com/embed/" + v.id + "?" + p.toString();
+  }
   const p = new URLSearchParams({ rel: "0", music_info: "0", description: "0", native_context_menu: "0",
     closed_caption: "1", autoplay: "1", loop: "0" });
-  return "https://www.tiktok.com/player/v1/" + id + "?" + p.toString();
+  return "https://www.tiktok.com/player/v1/" + v.id + "?" + p.toString();
 }
 
 /* ---------- Lists ---------- */
@@ -347,17 +388,18 @@ function inView(v, vw) {
   if (vw.type === "fav") return !!favs[v.link];
   if (vw.type === "cat") return v.cats.includes(vw.name);
   if (vw.type === "uncat") return v.cats.length === 0;
-  if (vw.type === "creator") return v.author === vw.name;
+  if (vw.type === "creator") return v.who === vw.name;
+  if (vw.type === "tiktok" || vw.type === "youtube") return v.platform === vw.type;
   return true;
 }
 function matchesQuery(v) {
   if (!query) return true;
-  const hay = [v.note, v.title, v.author, "@" + v.author, v.from, v.cats.join(" ")].join(" ").toLowerCase();
+  const hay = [v.note, v.title, v.who, v.from, v.platform, v.cats.join(" ")].join(" ").toLowerCase();
   return query.toLowerCase().split(/\s+/).filter(Boolean).every(w => hay.includes(w));
 }
 function viewLabel(vw) {
-  if (vw.type === "creator") return "@" + vw.name;
-  return { all: "All videos", new: "New", fav: "Favorites", uncat: "No category" }[vw.type] || vw.name;
+  if (vw.type === "creator") return vw.name;
+  return { all: "All videos", new: "New", fav: "Favorites", uncat: "No category", tiktok: "TikTok", youtube: "YouTube" }[vw.type] || vw.name;
 }
 function sameView(a, b) { return a.type === b.type && (a.name || "") === (b.name || ""); }
 function tally(getter) {
@@ -370,7 +412,7 @@ function allCategories() {
   return Object.keys(c).sort((a, b) => a.localeCompare(b)).map(name => ({ name, n: c[name] }));
 }
 function allCreators() {
-  const c = tally(v => v.author);
+  const c = tally(v => v.who);
   return Object.keys(c).sort((a, b) => c[b] - c[a] || a.localeCompare(b)).map(name => ({ name, n: c[name] }));
 }
 
@@ -397,6 +439,11 @@ function renderNav() {
   main.appendChild(navButton({ type: "all" }, "▦", "All videos", videos.length));
   main.appendChild(navButton({ type: "new" }, "●", "New", count({ type: "new" })));
   main.appendChild(navButton({ type: "fav" }, "♥", "Favorites", count({ type: "fav" })));
+  const tt = count({ type: "tiktok" }), yt = count({ type: "youtube" });
+  if (tt && yt) {
+    main.appendChild(navButton({ type: "tiktok" }, "♪", "TikTok", tt));
+    main.appendChild(navButton({ type: "youtube" }, "▶", "YouTube", yt));
+  }
 
   const cats = allCategories();
   const box = $("navCats"); box.innerHTML = "";
@@ -408,10 +455,11 @@ function renderNav() {
   const creators = allCreators();
   const cbox = $("navCreators"); cbox.innerHTML = "";
   $("creatorHead").style.display = creators.length ? "" : "none";
-  creators.forEach(c => cbox.appendChild(navButton({ type: "creator", name: c.name }, "@", c.name, c.n)));
+  creators.forEach(c => cbox.appendChild(navButton({ type: "creator", name: c.name }, "☺", c.name, c.n)));
 
   const chips = $("chips"); chips.innerHTML = "";
-  const chipList = [{ type: "all" }, { type: "new" }, { type: "fav" }].concat(cats.map(c => ({ type: "cat", name: c.name })));
+  const chipList = [{ type: "all" }, { type: "new" }, { type: "fav" }]
+    .concat(tt && yt ? [{ type: "tiktok" }, { type: "youtube" }] : [], cats.map(c => ({ type: "cat", name: c.name })));
   if (!chipList.some(vw => sameView(vw, view))) chipList.push(view); // e.g. a creator picked in the menu
   chipList.forEach(vw => {
     const c = el("button", "chip" + (sameView(vw, view) ? " on" : ""), viewLabel(vw));
@@ -440,7 +488,7 @@ function renderGrid() {
 
 function subLine(v) {
   const bits = [];
-  if (v.author) bits.push("@" + v.author);
+  if (v.who) bits.push(v.who);
   if (v.from) bits.push("from " + v.from);
   return bits.join(" · ");
 }
@@ -532,11 +580,13 @@ function activate(i) {
   const v = current[i];
   const frame = feed.children[i].querySelector(".sframe");
   const f = document.createElement("iframe");
-  f.src = playerUrl(v.id);
+  f.src = playerUrl(v);
   f.allow = "autoplay; fullscreen; encrypted-media";
   f.setAttribute("allowfullscreen", "");
   f.title = "Video";
   frame.innerHTML = ""; frame.appendChild(f);
+  ytState = null;
+  if (v.platform === "youtube") f.addEventListener("load", () => ytHello(f));
   if (!seen[v.link]) { seen[v.link] = Date.now(); store.set("seenVideos", seen); }
   updatePlayerButtons();
 }
@@ -564,6 +614,9 @@ function updatePlayerButtons() {
   $("pDown").disabled = activeIndex === current.length - 1;
   $("pPos").textContent = (activeIndex + 1) + " of " + current.length;
   $("pAuto").classList.toggle("on", autoNext);
+  $("pSpeed").style.display = v.platform === "youtube" ? "" : "none";
+  $("pSpeed").textContent = ytSpeed + "x";
+  $("pSpeed").classList.toggle("on", ytSpeed !== 1);
   $("pAuto").textContent = autoNext ? "Auto-next on" : "Auto-next off";
 }
 
@@ -578,19 +631,49 @@ $("pDown").addEventListener("click", () => goTo(activeIndex + 1));
 $("pFav").addEventListener("click", () => { const v = current[activeIndex]; if (v) toggleFav(v); });
 $("pAuto").addEventListener("click", () => { autoNext = !autoNext; store.set("autoNext", autoNext); updatePlayerButtons(); });
 
-// TikTok's player tells the page when a video ends (state 0); then move on to the next one.
+// YouTube's player is driven by messages too: ask it to report its state, and set the speed.
+let ytSpeed = store.get("ytSpeed", 1);
+let ytState = null;
+function ytSend(f, func, args) {
+  try { f.contentWindow.postMessage(JSON.stringify({ event: "command", func, args: args || [], id: 1, channel: "widget" }), "*"); } catch (e) {}
+}
+function ytHello(f) {
+  // Repeated a few times because the player takes a moment to start listening.
+  [0, 600, 1500, 3000].forEach(ms => setTimeout(() => {
+    if (!f.isConnected) return;
+    try { f.contentWindow.postMessage(JSON.stringify({ event: "listening", id: 1, channel: "widget" }), "*"); } catch (e) {}
+    ytSend(f, "addEventListener", ["onStateChange"]);
+    ytSend(f, "setPlaybackRate", [ytSpeed]);
+  }, ms));
+}
+$("pSpeed").addEventListener("click", () => {
+  ytSpeed = ytSpeed === 1 ? 2 : 1; store.set("ytSpeed", ytSpeed);
+  const live = $("feed").querySelector("iframe");
+  if (live) ytSend(live, "setPlaybackRate", [ytSpeed]);
+  updatePlayerButtons();
+});
+
+// Both players tell the page when a video ends (state 0); then move on to the next one.
 window.addEventListener("message", e => {
   let host = "";
   try { host = new URL(e.origin).hostname; } catch (_) { return; }
-  if (!/(^|\.)tiktok\.com$/.test(host)) return;
   const live = $("feed").querySelector("iframe");
   if (!live || e.source !== live.contentWindow) return;
   let d = e.data;
   if (typeof d === "string") { try { d = JSON.parse(d); } catch (_) { return; } }
-  if (!d || !d["x-tiktok-player"]) return;
-  if (d.type === "onStateChange" && Number(d.value) === 0 && autoNext && activeIndex < current.length - 1) {
-    goTo(activeIndex + 1);
-  }
+  if (!d) return;
+  let state = null;
+  if (/(^|\.)tiktok\.com$/.test(host)) {
+    if (d["x-tiktok-player"] && d.type === "onStateChange") state = Number(d.value);
+  } else if (/(^|\.)(youtube\.com|youtube-nocookie\.com)$/.test(host)) {
+    let ys = null;
+    if (d.event === "onStateChange") ys = Number(d.info);
+    else if (d.event === "infoDelivery" && d.info && typeof d.info.playerState === "number") ys = d.info.playerState;
+    if (ys === null || ys === ytState) return;   // only act when the state changes
+    ytState = ys; state = ys;
+    if (ys === 1 && ytSpeed !== 1) ytSend(live, "setPlaybackRate", [ytSpeed]);
+  } else return;
+  if (state === 0 && autoNext && activeIndex < current.length - 1) goTo(activeIndex + 1);
 });
 
 /* ---------- Load ---------- */
@@ -606,10 +689,10 @@ async function refresh() {
     const seenLinks = new Set();
     const entries = rows
       .map(c => ({ link: (c[0] || "").trim(), note: (c[1] || "").trim(), from: (c[2] || "").trim(), cats: splitCats(c[3]) }))
-      .filter(e => isTikTok(e.link) && !isProfile(e.link) && !seenLinks.has(e.link) && seenLinks.add(e.link))
+      .filter(e => platformOf(e.link) && !isProfile(e.link) && !seenLinks.has(e.link) && seenLinks.add(e.link))
       .reverse(); // newest (bottom of sheet) first
-    const looked = await Promise.all(entries.map(e => lookup(e.link)));
-    store.set("videoMeta2", meta);
+    const looked = await Promise.all(entries.map(e => lookup(e.link, platformOf(e.link))));
+    store.set("videoMeta3", meta);
     videos = entries.map((e, i) => looked[i] ? Object.assign({}, e, looked[i]) : null).filter(Boolean);
     if (view.type === "cat" && !allCategories().some(c => c.name === view.name)) view = { type: "all" };
     if (view.type === "creator" && !allCreators().some(c => c.name === view.name)) view = { type: "all" };
